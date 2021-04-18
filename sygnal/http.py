@@ -303,7 +303,7 @@ class HealthHandler(Resource):
         `/health` is used for automatic checking of whether the service is up.
         It should just return a blank 200 OK response.
         """
-        return b""
+        return b"Sygnal is running"
 
 
 class SygnalLoggedSite(server.Site):

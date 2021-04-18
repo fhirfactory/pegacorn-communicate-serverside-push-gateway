@@ -1,0 +1,123 @@
+Setup a Sygnal server running in Docker using Kubernetes and Helm
+=================================================================
+These instructions will setup Sygnal to use SSL.
+SQLite is being used but this will be changed to Postgres.
+
+Docker Image
+============
+Docker Hub image "matrixdotorg/sygnal" is being used.
+
+matrixdotorg - https://hub.docker.com/r/matrixdotorg/sygnal
+
+Development steps performed
+===========================
+
+From https://github.com/fhirfactory/pegacorn-communicate-serverside-push-gateway#setup
+
+1) Copy https://github.com/fhirfactory/pegacorn-communicate-serverside-push-gateway/blob/master/sygnal.yaml.sample to aether-host-files\common\sygnal\sygnal.yaml
+
+2) Modify the default file aether-host-files\common\sygnal\sygnal.yaml and commit to git.
+
+	Changes made for TLS/SSL
+		1) Added tls_certificate_path and change the value to:
+			tls_certificate_path: "/var/lib/synapse/certificates/pegacorn-communicate-push-gateway.site-a.cer"
+			
+		2) Uncomment the tls_private_key_path and change the valaue to:
+			tls_private_key_path: "/var/lib/synapse/certificates/pegacorn-communicate-push-gateway.site-a.key"
+
+	Changes made to run in docker
+		1) Change bind_addresses: from ['127.0.0.1'] to ['0.0.0.0']
+
+3) Create your server certificate and key and make sure they are in pem format, and that the key does NOT have a passphrase:
+Create-Cert-Set -certSubject 'pegacorn-communicate-push-gateway.site-a' -certPwd 'Password' -doNOTSecureKeyFileWithAPwd $True
+
+One-off Setup
+=============
+
+1) Copy the certificates and config files to a host path location.  Remember this location as it is needed for the helm command.
+    cp -rf /host_mnt/e/dev/aether-host-files/common/* /data/
+	cp -rf /host_mnt/e/dev/aether-host-files/LocalWorkstations/* /data/
+		
+2) Add the following to the hosts file
+	pegacorn-communicate-push-gateway.site-a
+	
+3) In a command prompt create the kubernetes secrets
+	#NOTE: please ensure none of the secrets contain the ampersand character
+	kubectl create secret generic pegacorn-communicate-push-gateway-secrets --from-literal=gcmSecret="<Get from lastpass.com>" --namespace=site-a
+	
+	
+Build and deploy
+================
+E:
+cd \dev\github\pegacorn-communicate-serverside-push-gateway
+docker build --rm --build-arg IMAGE_BUILD_TIMESTAMP="%date% %time%" -t pegacorn-communicate-push-gateway:1.0.0-snapshot .
+\helm\helm upgrade pegacorn-communicate-push-gateway-site-a --install --namespace site-a --set serviceName=pegacorn-communicate-push-gateway,basePort=30885,hostPathCerts=/data/certificates,hostPath=/data/sygnal,imageTag=1.0.0-snapshot,matrixLogLevel=DEBUG,androidAppId=au.gov.act.hd.aether,httpProxyHostAndPort=[Domain]%5C[UserId]:[Password]@[Proxy host]:[Proxy Port],numOfPods=1 helm
+
+
+URL
+===
+Go to the below URL and if everything has been configured correctly then a page will appear containing: "Sygnal is running".
+	https://pegacorn-communicate-push-gateway.site-a:30885/health
+	
+Testing
+=======
+Based on https://matrix.org/docs/spec/client_server/r0.5.0#post-matrix-client-r0-pushers-set 
+    
+1.  Log in as a user and get the access_token to use as the bearer token for the remaining requests.
+    e.g. POST https://pegacorn-communicate-roomserver.site-a:30880/_matrix/client/r0/login using POSTMAN
+	{
+	  "type": "m.login.password",
+	  "identifier": {
+		"type": "m.id.user",
+		"user": "Jasen.SchremmerTMP"
+	  },
+	  "password": "[Password]",
+	  "device_id": "IRIS",
+	  "IGNORED_initial_device_display_name": "IRIS"
+	} 
+ 
+2.  POST to https://pegacorn-communicate-roomserver.site-a:30880/_matrix/client/r0/pushers/set
+	{
+		"lang": "en",
+		"kind": "http",
+		"app_display_name": "Lingo",
+		"device_display_name": "Pixel 4",
+		"app_id": "au.gov.act.hd.aether",
+		"pushkey": "[Registration ID assigned by GCM to a single instance of a single application installed on a device]",
+		"data": {
+			"url": "https://pegacorn-communicate-push-gateway.site-a:30885/_matrix/push/v1/notify",
+			"format": "event_id_only"
+		}
+	}
+
+3.  Confirm the pusher has been registered for the user
+    GET to https://pegacorn-communicate-roomserver.site-a:30880/_matrix/client/r0/pushers
+	the response body should be like:
+	{
+		"pushers": [
+			{
+				"app_display_name": "Lingo",
+				"app_id": "au.gov.act.hd.aether",
+				"data": {
+					"url": "https://pegacorn-communicate-push-gateway.site-a:30885/_matrix/push/v1/notify",
+					"format": "event_id_only"
+				},
+				"device_display_name": "Pixel 4",
+				"kind": "http",
+				"lang": "en",
+				"profile_tag": "",
+				"pushkey": "[Registration ID assigned by GCM to a single instance of a single application installed on a device]"
+			}
+		]
+	}	
+
+4.  Use https://pegacorn-communicate-web.site-a:30890 and send a message to the user (make sure this user doesn't have an open Lingo session that is the active tab/app on a device), from another user
+
+5.  Confirm in the pegacorn-communicate-push-gateway kubernetes pod logs that notifications are received.
+    NOTE: the python libraries seem to be stuggling with authenticated proxies as I was getting
+		Got Status: b'407' b'authenticationrequired' b'HTTP/1.0'
+	even though HTTPS_PROXY was set correctly as http://[Domain]%5C[Your first name]%20[Your Surname]:[Password (URL encoded)]@[proxy host]:[proxy port].  It is working when no authentication is required.
+
+To troubleshoot, you can
+- search for /_matrix/push/v1/notify in the pegacorn-communicate-roomserver kubernetes pod logs
+- GET https://pegacorn-communicate-roomserver.site-a:30880/_matrix/client/r0/notifications
