@@ -31,6 +31,7 @@ from twisted.internet.defer import ensureDeferred
 from twisted.python import log as twisted_log
 from twisted.python.failure import Failure
 
+from sygnal.helper import context_factory
 from sygnal.http import PushGatewayApiServer
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ CONFIG_DEFAULTS: dict = {
     # This is defined so the key is known to check_config, but it will not
     # define a default value.
     "database": None,
+    "tls_private_key_path": None,
+    "tls_certificate_path": None,
 }
 
 
@@ -216,8 +219,20 @@ class Sygnal(object):
         logger.info("Configured with app IDs: %r", self.pushkins.keys())
 
         for interface in bind_addresses:
-            logger.info("Starting listening on %s port %d", interface, port)
-            self.reactor.listenTCP(port, pushgateway_api.site, interface=interface)
+            if config.get("tls_certificate_path"):
+                #based on 
+                #1. https://twistedmatrix.com/documents/current/core/howto/ssl.html#tls-echo-server
+                #2. https://github.com/matrix-org/synapse/blob/b685c5e7f193b1afb95b96d0a827d74f7691faef/synapse/app/homeserver.py#L134
+                logger.info("Starting listening on %s port %d (TLS)", interface, port)
+                
+                tls_certificate_file = os.path.abspath(config.get("tls_certificate_path"))
+                tls_private_key_file = os.path.abspath(config.get("tls_private_key_path"))
+
+                tls_server_context_factory = context_factory.ServerContextFactory(tls_certificate_file, tls_private_key_file)                
+                self.reactor.listenSSL(port, pushgateway_api.site, tls_server_context_factory, interface=interface)
+            else: 
+                logger.info("Starting listening on %s port %d", interface, port)
+                self.reactor.listenTCP(port, pushgateway_api.site, interface=interface)
 
     def run(self):
         """
